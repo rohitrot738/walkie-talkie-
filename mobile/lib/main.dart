@@ -9,7 +9,8 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 // Default server; app ke andar "Server" field se badla ja sakta hai
 const defaultServerUrl = String.fromEnvironment('SERVER_URL', defaultValue: 'http://10.0.2.2:3000');
-const minFreq = 1.0, maxFreq = 999.9;
+// Frequency 3 decimal tak (1 unit = 0.001 MHz)
+const minFreq = 1000, maxFreq = 999999;
 
 void main() {
   FlutterForegroundTask.initCommunicationPort();
@@ -33,7 +34,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
   MediaStream? stream;
   final Map<String, RTCPeerConnection> pcs = {};
   final Map<String, List<RTCIceCandidate>> pendingIce = {};
-  double freq = 146.5;
+  int freq = 146500;
   bool joined = false, talking = false;
   String status = 'Not connected';
   int count = 0;
@@ -169,7 +170,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
       await done.future.timeout(const Duration(seconds: 8), onTimeout: () {});
       if (!socket.connected) return;
     }
-    socket.emitWithAck('join', freq.toStringAsFixed(1), ack: (res) async {
+    socket.emitWithAck('join', _freqText, ack: (res) async {
       if (res['error'] != null) {
         setState(() => status = res['error']);
         return;
@@ -208,10 +209,30 @@ class _WalkieScreenState extends State<WalkieScreen> {
     setState(() => talking = false);
   }
 
-  void _step(double d) => setState(() {
-        freq = ((freq + d) * 10).round() / 10;
-        freq = freq.clamp(minFreq, maxFreq);
+  void _step(int d) => setState(() {
+        freq = (freq + d).clamp(minFreq, maxFreq).toInt();
       });
+
+  String get _freqText => (freq / 1000).toStringAsFixed(3);
+
+  Future<void> _editFreq() async {
+    final c = TextEditingController(text: _freqText);
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Frequency (MHz)'),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(hintText: '1.000 - 999.999'),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('OK'))],
+      ),
+    );
+    final parsed = double.tryParse(v ?? '');
+    if (parsed != null) setState(() => freq = (parsed * 1000).round().clamp(minFreq, maxFreq).toInt());
+  }
 
   @override
   void dispose() {
@@ -234,9 +255,12 @@ class _WalkieScreenState extends State<WalkieScreen> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(color: const Color(0xFF8FD18F), borderRadius: BorderRadius.circular(8)),
               child: Column(children: [
-                const Text('FREQ (MHz) 1.0 - 999.9', style: TextStyle(color: Color(0xFF005522))),
-                Text(freq.toStringAsFixed(1),
-                    style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Color(0xFF005522))),
+                const Text('FREQ (MHz) 1.000 - 999.999', style: TextStyle(color: Color(0xFF005522))),
+                GestureDetector(
+                  onTap: _editFreq,
+                  child: Text(_freqText,
+                      style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Color(0xFF005522))),
+                ),
                 Text(joined ? '$count on this frequency' : 'Not connected',
                     style: const TextStyle(color: Color(0xFF005522))),
               ]),
@@ -252,11 +276,13 @@ class _WalkieScreenState extends State<WalkieScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(color: Colors.white, iconSize: 36, icon: const Icon(Icons.remove_circle), onPressed: () => _step(-0.1)),
-              IconButton(color: Colors.white, iconSize: 28, icon: const Icon(Icons.keyboard_double_arrow_left), onPressed: () => _step(-10)),
-              IconButton(color: Colors.white, iconSize: 28, icon: const Icon(Icons.keyboard_double_arrow_right), onPressed: () => _step(10)),
-              IconButton(color: Colors.white, iconSize: 36, icon: const Icon(Icons.add_circle), onPressed: () => _step(0.1)),
+            Wrap(alignment: WrapAlignment.center, children: [
+              for (final d in [-1000, -100, -1, 1, 100, 1000])
+                TextButton(
+                  onPressed: () => _step(d),
+                  child: Text('${d < 0 ? '−' : '+'}${(d.abs() / 1000).toString().replaceFirst(RegExp(r'^0(?=\.)'), '')}',
+                      style: const TextStyle(color: Colors.white, fontSize: 18)),
+                ),
             ]),
             ElevatedButton(onPressed: _join, child: const Text('Join Frequency')),
             const SizedBox(height: 32),

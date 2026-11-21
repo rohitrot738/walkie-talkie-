@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 
-const MIN = 1.0, MAX = 999.9;
+const MIN = 1.0, MAX = 999.999;
 const app = express();
 app.use(express.static('public'));
 const io = new Server(http.createServer(app).listen(process.env.PORT || 3000));
@@ -24,14 +24,14 @@ function leave(socket) {
 
 io.on('connection', (socket) => {
   socket.on('join', (freq, cb) => {
-    const f = Math.round(parseFloat(freq) * 10) / 10;
-    if (!(f >= MIN && f <= MAX)) return cb && cb({ error: `Frequency ${MIN}-${MAX} ke beech honi chahiye` });
+    const f = Math.round(parseFloat(freq) * 1000) / 1000;
+    if (!(f >= MIN && f <= MAX)) return cb && cb({ error: `Frequency ${MIN.toFixed(3)}-${MAX.toFixed(3)} ke beech honi chahiye` });
     leave(socket);
-    const room = 'freq-' + f.toFixed(1);
+    const room = 'freq-' + f.toFixed(3);
     const peers = [...(io.sockets.adapter.rooms.get(room) || [])];
     socket.join(room);
     socket.data.room = room;
-    cb && cb({ freq: f.toFixed(1), peers, count: peers.length + 1, speaker: speakers[room] || null });
+    cb && cb({ freq: f.toFixed(3), peers, count: peers.length + 1, speaker: speakers[room] || null });
     socket.to(room).emit('peer-joined', socket.id);
   });
 

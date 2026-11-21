@@ -22,10 +22,10 @@
 </head>
 <body>
 <div class="radio">
-  <div class="screen"><div>FREQ (MHz) 1.0 - 999.9</div><div class="freq" id="disp">---.-</div><div id="info">Not connected</div></div>
+  <div class="screen"><div>FREQ (MHz) 1.000 - 999.999</div><div class="freq" id="disp">---.---</div><div id="info">Not connected</div></div>
   <div class="row">
     <button class="step" id="dn">−</button>
-    <input id="freq" type="number" min="1" max="999.9" step="0.1" value="146.5">
+    <input id="freq" type="number" min="1" max="999.999" step="0.001" value="146.500">
     <button class="step" id="up">+</button>
   </div>
   <button class="go" id="join" style="width:100%">Join Frequency</button>
@@ -123,9 +123,9 @@ p.addEventListener('pointerdown', start);
 document.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target.tagName !== 'INPUT' && !e.repeat) { e.preventDefault(); start(); } });
 document.addEventListener('keyup', (e) => { if (e.code === 'Space') stop(); });
 
-const bump = (d) => { $('freq').value = Math.min(999.9, Math.max(1, Math.round(($('freq').value * 10) + d) / 10)).toFixed(1); };
-$('up').onclick = () => bump(1);
-$('dn').onclick = () => bump(-1);
+const bump = (d) => { $('freq').value = (Math.min(999999, Math.max(1000, Math.round($('freq').value * 1000) + d)) / 1000).toFixed(3); };
+$('up').onclick = () => bump(100);
+$('dn').onclick = () => bump(-100);
 $('join').onclick = join;
 </script>
 </body>

@@ -1,6 +1,6 @@
 # Walkie Talkie
 
-Frequency-based push-to-talk app. Same frequency = same room. Range: 1.0 – 999.9 MHz (0.1 step).
+Frequency-based push-to-talk app. Same frequency = same room. Range: 1.000 – 999.999 MHz (0.001 step, 3 decimals).
 
 - `server.js` – Node + Socket.IO signaling server (WebRTC audio is peer-to-peer)
 - `public/` – web client
