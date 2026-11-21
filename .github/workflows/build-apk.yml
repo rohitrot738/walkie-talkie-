@@ -56,7 +56,7 @@ jobs:
           flutter build apk --release \
             --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }} \
             --dart-define=BUILD_NUMBER=${{ github.run_number }} \
-            --dart-define=SERVER_URL=${{ vars.SERVER_URL || 'http://10.0.2.2:3000' }}
+            --dart-define=SERVER_URL=${{ vars.SERVER_URL || 'https://rohitrot738-walkie.onrender.com' }}
       - name: Write version.json
         run: |
           cp mobile/build/app/outputs/flutter-apk/app-release.apk walkie-talkie.apk

@@ -1,10 +1,12 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 
 const MIN = 1.0, MAX = 999.999;
 const app = express();
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/health', (_req, res) => res.json({ ok: true, app: 'walkie' }));
 const io = new Server(http.createServer(app).listen(process.env.PORT || 3000));
 
 const speakers = {}; // room -> socket id currently talking
@@ -24,6 +26,7 @@ function leave(socket) {
 
 io.on('connection', (socket) => {
   socket.on('join', (freq, cb) => {
+    if (typeof cb !== 'function') cb = null;
     const f = Math.round(parseFloat(freq) * 1000) / 1000;
     if (!(f >= MIN && f <= MAX)) return cb && cb({ error: `Frequency ${MIN.toFixed(3)}-${MAX.toFixed(3)} ke beech honi chahiye` });
     leave(socket);
@@ -35,9 +38,13 @@ io.on('connection', (socket) => {
     socket.to(room).emit('peer-joined', socket.id);
   });
 
-  socket.on('signal', ({ to, data }) => io.to(to).emit('signal', { from: socket.id, data }));
+  socket.on('signal', (msg) => {
+    if (msg && typeof msg.to === 'string') io.to(msg.to).emit('signal', { from: socket.id, data: msg.data });
+  });
 
-  socket.on('ptt-start', (cb) => {
+  // Ack callback is always the last argument (mobile clients also send a data arg)
+  socket.on('ptt-start', (...args) => {
+    const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : () => {};
     const room = roomOf(socket);
     if (!room || (speakers[room] && speakers[room] !== socket.id)) return cb(false);
     speakers[room] = socket.id;
@@ -56,4 +63,5 @@ io.on('connection', (socket) => {
   socket.on('disconnecting', () => leave(socket));
 });
 
+process.on('uncaughtException', (e) => console.error('uncaught:', e));
 console.log('Walkie running on http://localhost:' + (process.env.PORT || 3000));

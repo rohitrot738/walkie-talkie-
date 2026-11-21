@@ -9,8 +9,8 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'updater.dart';
 
-// Default server; app ke andar "Server" field se badla ja sakta hai
-const defaultServerUrl = String.fromEnvironment('SERVER_URL', defaultValue: 'http://10.0.2.2:3000');
+// Optional build-time default (--dart-define=SERVER_URL=...); app ke "Server URL" field se badla ja sakta hai
+const defaultServerUrl = String.fromEnvironment('SERVER_URL');
 // Frequency 3 decimal tak (1 unit = 0.001 MHz)
 const minFreq = 1000, maxFreq = 999999;
 
@@ -31,6 +31,8 @@ class WalkieScreen extends StatefulWidget {
 class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver {
   io.Socket? _socket;
   String? _url;
+  Timer? _retry;
+  bool _wantJoin = false;
   io.Socket get socket => _socket!;
   final urlCtrl = TextEditingController(text: defaultServerUrl);
   MediaStream? stream;
@@ -54,25 +56,67 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
     WidgetsBinding.instance.addPostFrameCallback((_) => checkForUpdate(context));
     _initForegroundService();
     SharedPreferences.getInstance().then((p) {
-      final u = p.getString('serverUrl');
+      final u = p.getString('server_url');
       if (u != null) urlCtrl.text = u;
+      // Free servers sleep when idle; connecting early wakes them up
+      final url = _normalizeUrl(urlCtrl.text);
+      if (mounted && url.isNotEmpty) _connect(url);
     });
+  }
+
+  bool _validUrl(String u) => u.startsWith('http://') || u.startsWith('https://');
+
+  // Accepts "name.onrender.com" too; trailing slashes are dropped
+  String _normalizeUrl(String u) {
+    u = u.trim().replaceAll(RegExp(r'/+$'), '');
+    if (u.isNotEmpty && !_validUrl(u)) u = 'https://$u';
+    return u;
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) checkForUpdate(context);
+    if (state == AppLifecycleState.resumed) {
+      checkForUpdate(context);
+      final s = _socket;
+      if (s != null && !s.connected) s.connect();
+    }
+  }
+
+  void _closeSocket() {
+    _retry?.cancel();
+    _socket?.clearListeners();
+    _socket?.dispose();
   }
 
   void _connect(String url) {
-    _socket?.dispose();
+    _closeSocket();
     final sock = io.io(url, io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
     _socket = sock;
     _url = url;
+    sock.on('connect', (_) {
+      if (_wantJoin) {
+        _emitJoin();
+      } else if (mounted) {
+        setState(() => status = 'Server connected');
+      }
+    });
+    sock.on('disconnect', (_) {
+      if (!mounted) return;
+      setState(() {
+        joined = false;
+        talking = false;
+        status = 'Server se connection toot gaya, dobara try ho raha hai...';
+      });
+    });
+    sock.on('connect_error', (e) {
+      if (mounted) setState(() => status = 'Server se connect nahi ho paya, retry ho raha hai...\n(free server ko jagne mein 1 min lag sakta hai)\n$e');
+    });
     sock.on('signal', (d) => _onSignal(d['from'], d['data']));
-    sock.on('peer-left', (id) => _dropPeer(id));
+    sock.on('peer-left', (id) {
+      _dropPeer(id);
+      if (mounted) setState(() => count = count > 1 ? count - 1 : 1);
+    });
     sock.on('peer-joined', (_) => setState(() => count++));
-    sock.on('connect_error', (_) => setState(() => status = 'Server se connect nahi ho paya'));
     sock.on('speaker', (id) => setState(() {
           status = id == null
               ? 'Channel free'
@@ -80,6 +124,10 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
                   ? 'You are talking...'
                   : 'Someone is talking...';
         }));
+    // Initial connection can fail while the server is waking up, so keep retrying
+    _retry = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!sock.connected) sock.connect();
+    });
     sock.connect();
   }
 
@@ -121,6 +169,7 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
     await Permission.microphone.request();
     stream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
     stream!.getAudioTracks().first.enabled = false;
+    await Helper.setSpeakerphoneOn(true);
   }
 
   Future<RTCPeerConnection> _peer(String id) async {
@@ -167,20 +216,39 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
   }
 
   Future<void> _join() async {
-    await _ensureMic();
-    pcs.keys.toList().forEach(_dropPeer);
-    final url = urlCtrl.text.trim();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('serverUrl', url);
-    if (_socket == null || _url != url) _connect(url);
-    if (!socket.connected) {
-      final done = Completer<void>();
-      socket.once('connect', (_) => done.complete());
-      await done.future.timeout(const Duration(seconds: 8), onTimeout: () {});
-      if (!socket.connected) return;
+    final url = _normalizeUrl(urlCtrl.text);
+    if (url.isEmpty) {
+      setState(() => status = 'Pehle Server URL daalein');
+      return;
     }
+    urlCtrl.text = url;
+    try {
+      await _ensureMic();
+    } catch (_) {
+      setState(() => status = 'Microphone permission chahiye (Settings mein allow karein)');
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    // Only remember a custom URL, so a new built-in default reaches users after an update
+    if (url == defaultServerUrl) {
+      await prefs.remove('server_url');
+    } else {
+      await prefs.setString('server_url', url);
+    }
+    _wantJoin = true;
+    if (_socket == null || _url != url) _connect(url);
+    if (socket.connected) {
+      _emitJoin();
+    } else {
+      setState(() => status = 'Server se connect ho raha hai... (pehli baar 1 min lag sakta hai)');
+    }
+  }
+
+  void _emitJoin() {
+    pcs.keys.toList().forEach(_dropPeer);
     socket.emitWithAck('join', _freqText, ack: (res) async {
       if (res['error'] != null) {
+        _wantJoin = false;
         setState(() => status = res['error']);
         return;
       }
@@ -246,9 +314,9 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _closeSocket();
     pcs.keys.toList().forEach(_dropPeer);
     stream?.dispose();
-    _socket?.dispose();
     FlutterForegroundTask.stopService();
     super.dispose();
   }
@@ -283,7 +351,11 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
                 controller: urlCtrl,
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
-                    labelText: 'Server URL', labelStyle: TextStyle(color: Colors.white70), isDense: true),
+                    labelText: 'Server URL',
+                    hintText: 'https://your-server.onrender.com',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    hintStyle: TextStyle(color: Colors.white24),
+                    isDense: true),
               ),
             ),
             const SizedBox(height: 12),
@@ -315,7 +387,10 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
               ),
             ),
             const SizedBox(height: 20),
-            Text(status, style: const TextStyle(color: Colors.white)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(status, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
+            ),
             TextButton(
               onPressed: () => checkForUpdate(context, silent: false),
               child: Text('Check for update (build $buildNumber)', style: const TextStyle(color: Colors.white54)),
