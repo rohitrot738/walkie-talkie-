@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Walkie Talkie</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#111;color:#eee;font-family:system-ui,sans-serif}
+  .radio{width:320px;padding:24px;background:#222;border-radius:24px;text-align:center;box-shadow:0 8px 30px #000}
+  .screen{background:#0b2;background:#8fd18f;color:#052;border-radius:8px;padding:12px;font-family:monospace}
+  .freq{font-size:42px;font-weight:bold}
+  .row{display:flex;gap:8px;margin:14px 0}
+  button,input{font-size:18px;border:0;border-radius:10px;padding:12px}
+  input{flex:1;min-width:0;text-align:center}
+  .step{background:#444;color:#fff;width:48px}
+  .go{background:#357;color:#fff}
+  #ptt{width:160px;height:160px;border-radius:50%;background:#c33;color:#fff;font-size:20px;font-weight:bold;touch-action:none;user-select:none}
+  #ptt.on{background:#3c3;box-shadow:0 0 30px #3c3}
+  #ptt:disabled{background:#555}
+  #status{margin-top:12px;min-height:22px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="radio">
+  <div class="screen"><div>FREQ (MHz) 1.0 - 999.9</div><div class="freq" id="disp">---.-</div><div id="info">Not connected</div></div>
+  <div class="row">
+    <button class="step" id="dn">−</button>
+    <input id="freq" type="number" min="1" max="999.9" step="0.1" value="146.5">
+    <button class="step" id="up">+</button>
+  </div>
+  <button class="go" id="join" style="width:100%">Join Frequency</button>
+  <div style="margin:20px 0"><button id="ptt" disabled>HOLD TO TALK</button></div>
+  <div id="status"></div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const socket = io();
+const pcs = {};
+let stream, track, joined = false, talking = false;
+const cfg = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+async function getMic() {
+  if (stream) return;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  track = stream.getAudioTracks()[0];
+  track.enabled = false;
+}
+
+function makePeer(id) {
+  if (pcs[id]) return pcs[id];
+  const pc = new RTCPeerConnection(cfg);
+  pcs[id] = pc;
+  pc.addTrack(track, stream);
+  pc.onicecandidate = (e) => e.candidate && socket.emit('signal', { to: id, data: { candidate: e.candidate } });
+  pc.ontrack = (e) => {
+    let a = document.getElementById('a-' + id);
+    if (!a) { a = document.createElement('audio'); a.id = 'a-' + id; a.autoplay = true; document.body.appendChild(a); }
+    a.srcObject = e.streams[0];
+  };
+  return pc;
+}
+
+function dropPeer(id) {
+  pcs[id]?.close(); delete pcs[id];
+  document.getElementById('a-' + id)?.remove();
+}
+
+function leaveAll() { Object.keys(pcs).forEach(dropPeer); }
+
+async function join() {
+  try { await getMic(); } catch { $('status').textContent = 'Mic permission chahiye (HTTPS/localhost)'; return; }
+  leaveAll();
+  socket.emit('join', $('freq').value, async (res) => {
+    if (res.error) { $('status').textContent = res.error; return; }
+    joined = true;
+    $('disp').textContent = res.freq;
+    $('info').textContent = res.count + ' on this frequency';
+    $('ptt').disabled = false;
+    $('status').textContent = 'Joined ' + res.freq + ' MHz';
+    for (const id of res.peers) {
+      const pc = makePeer(id);
+      await pc.setLocalDescription(await pc.createOffer());
+      socket.emit('signal', { to: id, data: { sdp: pc.localDescription } });
+    }
+  });
+}
+
+socket.on('signal', async ({ from, data }) => {
+  const pc = makePeer(from);
+  if (data.sdp) {
+    await pc.setRemoteDescription(data.sdp);
+    if (data.sdp.type === 'offer') {
+      await pc.setLocalDescription(await pc.createAnswer());
+      socket.emit('signal', { to: from, data: { sdp: pc.localDescription } });
+    }
+  } else if (data.candidate) {
+    try { await pc.addIceCandidate(data.candidate); } catch {}
+  }
+});
+socket.on('peer-left', dropPeer);
+socket.on('peer-joined', () => { const n = Object.keys(pcs).length + 2; $('info').textContent = n + ' on this frequency'; });
+socket.on('speaker', (id) => {
+  $('status').textContent = !id ? 'Channel free' : id === socket.id ? 'You are talking...' : 'Someone is talking...';
+});
+
+async function start() {
+  if (!joined || talking) return;
+  socket.emit('ptt-start', (ok) => {
+    if (!ok) { $('status').textContent = 'Channel busy'; return; }
+    talking = true; track.enabled = true; $('ptt').classList.add('on');
+  });
+}
+function stop() {
+  if (!talking) return;
+  talking = false; track.enabled = false; $('ptt').classList.remove('on');
+  socket.emit('ptt-stop');
+}
+
+const p = $('ptt');
+p.addEventListener('pointerdown', start);
+['pointerup', 'pointerleave', 'pointercancel'].forEach((e) => p.addEventListener(e, stop));
+document.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target.tagName !== 'INPUT' && !e.repeat) { e.preventDefault(); start(); } });
+document.addEventListener('keyup', (e) => { if (e.code === 'Space') stop(); });
+
+const bump = (d) => { $('freq').value = Math.min(999.9, Math.max(1, Math.round(($('freq').value * 10) + d) / 10)).toFixed(1); };
+$('up').onclick = () => bump(1);
+$('dn').onclick = () => bump(-1);
+$('join').onclick = join;
+</script>
+</body>
+</html>
