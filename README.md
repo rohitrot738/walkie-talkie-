@@ -8,22 +8,16 @@ Frequency-based push-to-talk app. Same frequency = same room. Range: 1.000 – 9
 
 ## Run
 ```
-npm install && node server.js
-cd mobile && flutter create . && flutter pub get && flutter run
+npm install && npm start
+cd mobile && flutter create --platforms=android . && python3 patch_android.py && flutter run
 ```
-### Background mode (Android)
-After `flutter create .`, in `android/app/src/main/AndroidManifest.xml` add inside `<manifest>`:
-```xml
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-<uses-permission android:name="android.permission.WAKE_LOCK"/>
-```
-and inside `<application>`:
-```xml
-<service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-    android:foregroundServiceType="microphone" android:exported="false"/>
-```
-Set `compileSdk`/`targetSdk` to 34+ and `minSdkVersion` to 21+.
+`patch_android.py` adds the Android permissions, the foreground service (background mode) and the update installer. Set the server address in the app's "Server URL" field.
 
-Set `serverUrl` in `mobile/lib/main.dart`. Add `RECORD_AUDIO`, `INTERNET`, `MODIFY_AUDIO_SETTINGS` permissions on Android and `NSMicrophoneUsageDescription` on iOS.
+## Auto-update (Android)
+Every CI build is published to the `latest` release (`walkie-talkie.apk` + `version.json`). The app checks it on start/resume and installs newer builds in-app.
+
+Updates must be signed with the same key, so add these repo secrets (Settings > Secrets and variables > Actions):
+- `KEYSTORE_BASE64` - base64 of the release keystore (alias `walkie`)
+- `KEYSTORE_PASSWORD` - keystore (and key) password
+
+Without them the workflow still builds but does not publish a release.

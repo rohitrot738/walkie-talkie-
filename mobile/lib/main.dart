@@ -7,6 +7,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+import 'updater.dart';
+
 // Default server; app ke andar "Server" field se badla ja sakta hai
 const defaultServerUrl = String.fromEnvironment('SERVER_URL', defaultValue: 'http://10.0.2.2:3000');
 // Frequency 3 decimal tak (1 unit = 0.001 MHz)
@@ -26,7 +28,7 @@ class WalkieScreen extends StatefulWidget {
   State<WalkieScreen> createState() => _WalkieScreenState();
 }
 
-class _WalkieScreenState extends State<WalkieScreen> {
+class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver {
   io.Socket? _socket;
   String? _url;
   io.Socket get socket => _socket!;
@@ -48,11 +50,18 @@ class _WalkieScreenState extends State<WalkieScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => checkForUpdate(context));
     _initForegroundService();
     SharedPreferences.getInstance().then((p) {
       final u = p.getString('serverUrl');
       if (u != null) urlCtrl.text = u;
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) checkForUpdate(context);
   }
 
   void _connect(String url) {
@@ -236,6 +245,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     pcs.keys.toList().forEach(_dropPeer);
     stream?.dispose();
     _socket?.dispose();
@@ -249,7 +259,8 @@ class _WalkieScreenState extends State<WalkieScreen> {
       backgroundColor: const Color(0xFF111111),
       body: SafeArea(
         child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
             Container(
               width: 300,
               padding: const EdgeInsets.all(16),
@@ -305,7 +316,12 @@ class _WalkieScreenState extends State<WalkieScreen> {
             ),
             const SizedBox(height: 20),
             Text(status, style: const TextStyle(color: Colors.white)),
+            TextButton(
+              onPressed: () => checkForUpdate(context, silent: false),
+              child: Text('Check for update (build $buildNumber)', style: const TextStyle(color: Colors.white54)),
+            ),
           ]),
+          ),
         ),
       ),
     );
