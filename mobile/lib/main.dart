@@ -1,11 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
-// Apne server ka address yahan daalein (emulator: 10.0.2.2, real phone: PC ka IP ya deployed URL)
-const serverUrl = 'http://10.0.2.2:3000';
+// Default server; app ke andar "Server" field se badla ja sakta hai
+const defaultServerUrl = String.fromEnvironment('SERVER_URL', defaultValue: 'http://10.0.2.2:3000');
 const minFreq = 1.0, maxFreq = 999.9;
 
 void main() {
@@ -23,7 +26,10 @@ class WalkieScreen extends StatefulWidget {
 }
 
 class _WalkieScreenState extends State<WalkieScreen> {
-  late io.Socket socket;
+  io.Socket? _socket;
+  String? _url;
+  io.Socket get socket => _socket!;
+  final urlCtrl = TextEditingController(text: defaultServerUrl);
   MediaStream? stream;
   final Map<String, RTCPeerConnection> pcs = {};
   final Map<String, List<RTCIceCandidate>> pendingIce = {};
@@ -42,17 +48,29 @@ class _WalkieScreenState extends State<WalkieScreen> {
   void initState() {
     super.initState();
     _initForegroundService();
-    socket = io.io(serverUrl, io.OptionBuilder().setTransports(['websocket']).build());
-    socket.on('signal', (d) => _onSignal(d['from'], d['data']));
-    socket.on('peer-left', (id) => _dropPeer(id));
-    socket.on('peer-joined', (_) => setState(() => count++));
-    socket.on('speaker', (id) => setState(() {
+    SharedPreferences.getInstance().then((p) {
+      final u = p.getString('serverUrl');
+      if (u != null) urlCtrl.text = u;
+    });
+  }
+
+  void _connect(String url) {
+    _socket?.dispose();
+    final sock = io.io(url, io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
+    _socket = sock;
+    _url = url;
+    sock.on('signal', (d) => _onSignal(d['from'], d['data']));
+    sock.on('peer-left', (id) => _dropPeer(id));
+    sock.on('peer-joined', (_) => setState(() => count++));
+    sock.on('connect_error', (_) => setState(() => status = 'Server se connect nahi ho paya'));
+    sock.on('speaker', (id) => setState(() {
           status = id == null
               ? 'Channel free'
-              : id == socket.id
+              : id == sock.id
                   ? 'You are talking...'
                   : 'Someone is talking...';
         }));
+    sock.connect();
   }
 
   // Foreground service keeps mic + socket alive when the app is in background
@@ -141,6 +159,16 @@ class _WalkieScreenState extends State<WalkieScreen> {
   Future<void> _join() async {
     await _ensureMic();
     pcs.keys.toList().forEach(_dropPeer);
+    final url = urlCtrl.text.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('serverUrl', url);
+    if (_socket == null || _url != url) _connect(url);
+    if (!socket.connected) {
+      final done = Completer<void>();
+      socket.once('connect', (_) => done.complete());
+      await done.future.timeout(const Duration(seconds: 8), onTimeout: () {});
+      if (!socket.connected) return;
+    }
     socket.emitWithAck('join', freq.toStringAsFixed(1), ack: (res) async {
       if (res['error'] != null) {
         setState(() => status = res['error']);
@@ -189,7 +217,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
   void dispose() {
     pcs.keys.toList().forEach(_dropPeer);
     stream?.dispose();
-    socket.dispose();
+    _socket?.dispose();
     FlutterForegroundTask.stopService();
     super.dispose();
   }
@@ -213,7 +241,17 @@ class _WalkieScreenState extends State<WalkieScreen> {
                     style: const TextStyle(color: Color(0xFF005522))),
               ]),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: 300,
+              child: TextField(
+                controller: urlCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'Server URL', labelStyle: TextStyle(color: Colors.white70), isDense: true),
+              ),
+            ),
+            const SizedBox(height: 12),
             Row(mainAxisSize: MainAxisSize.min, children: [
               IconButton(color: Colors.white, iconSize: 36, icon: const Icon(Icons.remove_circle), onPressed: () => _step(-0.1)),
               IconButton(color: Colors.white, iconSize: 28, icon: const Icon(Icons.keyboard_double_arrow_left), onPressed: () => _step(-10)),
