@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
+import 'dart:io' show HttpClient, SocketException;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -82,6 +84,40 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
     }
   }
 
+  bool _probing = false;
+
+  // A plain HTTP request tells apart "no server at this URL" from "server asleep" from "WebSocket blocked"
+  Future<void> _explainFailure(String url, Object? err) async {
+    if (_probing) return;
+    _probing = true;
+    var msg = '';
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+      try {
+        final req = await client.getUrl(Uri.parse('$url/socket.io/?EIO=4&transport=polling'));
+        final res = await req.close().timeout(const Duration(seconds: 70));
+        final body = await res.transform(utf8.decoder).join();
+        if (res.statusCode == 404) {
+          msg = 'Is URL pe walkie server nahi mila (404).\nRender pe server deploy karein ya sahi Server URL daalein.';
+        } else if (res.statusCode == 200 && body.contains('"sid"')) {
+          msg = 'Server chal raha hai par WebSocket connect nahi hua:\n$err';
+        } else {
+          msg = 'Server ne error diya (${res.statusCode}), jag raha ho sakta hai, 1 min ruko...';
+        }
+      } finally {
+        client.close(force: true);
+      }
+    } on TimeoutException {
+      msg = 'Server jawab nahi de raha (so raha hoga), 1 min ruko...';
+    } on SocketException {
+      msg = 'Server tak pahunch nahi paye. Internet ya Server URL check karein.';
+    } catch (e) {
+      msg = 'Connect error: $e';
+    }
+    _probing = false;
+    if (mounted && _url == url && !(_socket?.connected ?? false)) setState(() => status = msg);
+  }
+
   void _closeSocket() {
     _retry?.cancel();
     _socket?.clearListeners();
@@ -109,7 +145,9 @@ class _WalkieScreenState extends State<WalkieScreen> with WidgetsBindingObserver
       });
     });
     sock.on('connect_error', (e) {
-      if (mounted) setState(() => status = 'Server se connect nahi ho paya, retry ho raha hai...\n(free server ko jagne mein 1 min lag sakta hai)\n$e');
+      if (!mounted) return;
+      setState(() => status = 'Server se connect ho raha hai...');
+      _explainFailure(url, e);
     });
     sock.on('signal', (d) => _onSignal(d['from'], d['data']));
     sock.on('peer-left', (id) {
