@@ -1,5 +1,12 @@
 """Patches the generated Android project (run after `flutter create .`)."""
+import os
 import re
+
+FILEPATHS = '''<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="internal_apk_storage" path="ota_update/"/>
+</paths>
+'''
 
 PERMISSIONS = ['INTERNET', 'RECORD_AUDIO', 'MODIFY_AUDIO_SETTINGS', 'CAMERA', 'FOREGROUND_SERVICE',
                'FOREGROUND_SERVICE_MICROPHONE', 'POST_NOTIFICATIONS', 'WAKE_LOCK', 'ACCESS_NETWORK_STATE',
@@ -61,5 +68,12 @@ def patch_gradle():
     open(p, 'w').write(s)
 
 
+def write_filepaths():
+    # FileProvider paths used by ota_update to install the downloaded APK
+    os.makedirs('android/app/src/main/res/xml', exist_ok=True)
+    open('android/app/src/main/res/xml/filepaths.xml', 'w').write(FILEPATHS)
+
+
 patch_manifest()
 patch_gradle()
+write_filepaths()
