@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -7,10 +8,13 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 const serverUrl = 'http://10.0.2.2:3000';
 const minFreq = 1.0, maxFreq = 999.9;
 
-void main() => runApp(const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: WalkieScreen(),
-    ));
+void main() {
+  FlutterForegroundTask.initCommunicationPort();
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: WithForegroundTask(child: WalkieScreen()),
+  ));
+}
 
 class WalkieScreen extends StatefulWidget {
   const WalkieScreen({super.key});
@@ -37,6 +41,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
   @override
   void initState() {
     super.initState();
+    _initForegroundService();
     socket = io.io(serverUrl, io.OptionBuilder().setTransports(['websocket']).build());
     socket.on('signal', (d) => _onSignal(d['from'], d['data']));
     socket.on('peer-left', (id) => _dropPeer(id));
@@ -48,6 +53,39 @@ class _WalkieScreenState extends State<WalkieScreen> {
                   ? 'You are talking...'
                   : 'Someone is talking...';
         }));
+  }
+
+  // Foreground service keeps mic + socket alive when the app is in background
+  void _initForegroundService() {
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'walkie_service',
+        channelName: 'Walkie Talkie',
+        channelImportance: NotificationChannelImportance.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.nothing(),
+        allowWakeLock: true,
+        allowWifiLock: true,
+      ),
+    );
+  }
+
+  Future<void> _startService(String freqText) async {
+    await FlutterForegroundTask.requestNotificationPermission();
+    final title = 'Walkie Talkie';
+    final text = 'Listening on $freqText MHz';
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.updateService(notificationTitle: title, notificationText: text);
+    } else {
+      await FlutterForegroundTask.startService(
+        serviceId: 256,
+        notificationTitle: title,
+        notificationText: text,
+        serviceTypes: [ForegroundServiceTypes.microphone],
+      );
+    }
   }
 
   Future<void> _ensureMic() async {
@@ -108,6 +146,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
         setState(() => status = res['error']);
         return;
       }
+      _startService(res['freq']);
       setState(() {
         joined = true;
         count = res['count'];
@@ -151,6 +190,7 @@ class _WalkieScreenState extends State<WalkieScreen> {
     pcs.keys.toList().forEach(_dropPeer);
     stream?.dispose();
     socket.dispose();
+    FlutterForegroundTask.stopService();
     super.dispose();
   }
 
